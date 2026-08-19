@@ -1,0 +1,26 @@
+name: Tests
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pester:
+    name: Pester
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 3.4.0 -Scope CurrentUser -Force
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 3.4.0 -Force
+          Invoke-Pester ./tests/Extract-ImageArchives.Tests.ps1 -EnableExit
