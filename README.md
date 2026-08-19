@@ -1,42 +1,103 @@
 # AssetScripts
 
-`Extract-ImageArchives.ps1` extracts only selected image assets from ZIP files while preserving a predictable directory layout.
+AssetScripts is a PowerShell module for safely extracting selected image assets
+from collections of ZIP files. It exports one cmdlet-style advanced function:
+`Expand-ImageArchive`.
+
+## Requirements
+
+- PowerShell 7.0 or later
+- Windows, Linux, or macOS
+
+## Import the module
+
+Import the manifest directly from any location:
+
+```powershell
+Import-Module C:\Tools\AssetScripts\AssetScripts.psd1
+```
+
+For name-based imports, copy the project directory to an `AssetScripts\1.0.0`
+directory beneath one of the paths in `$env:PSModulePath`, then run:
+
+```powershell
+Import-Module AssetScripts
+```
+
+Confirm the exported command and view its full help:
+
+```powershell
+Get-Command -Module AssetScripts
+Get-Help Expand-ImageArchive -Full
+```
 
 ## Usage
 
-Place ZIP files anywhere below `archive/`, then run:
+Both paths are required and may be absolute or relative to the current directory:
 
 ```powershell
-pwsh ./Extract-ImageArchives.ps1
+Expand-ImageArchive `
+    -InputPath .\archive `
+    -OutputPath .\extracted
 ```
 
-For example, `archive/Bundle1/2dsprites2.zip` is extracted beneath `extracted/Bundle1/2dsprites2/`. Paths stored inside the ZIP are preserved exactly. An embedded ZIP such as `packs/icons.zip` is recursively extracted beneath `packs/icons/`.
+For example, `archive/Bundle1/2dsprites2.zip` is extracted beneath
+`extracted/Bundle1/2dsprites2/`. Paths stored inside the ZIP are preserved. An
+embedded ZIP such as `packs/icons.zip` is recursively extracted beneath
+`packs/icons/`.
 
-The defaults retain PNG, JPG/JPEG, GIF, BMP, WebP, TIFF, TGA, DDS, SVG, HDR, and EXR files. Matching is case-insensitive. All other entries are ignored, except embedded `.zip` files.
+The command returns one `AssetScripts.ImageArchiveExtractionResult` object for
+each top-level ZIP. This makes results easy to filter, format, or export:
+
+```powershell
+$results = Expand-ImageArchive -InputPath .\archive -OutputPath .\extracted
+$results | Where-Object Success
+$results | Format-Table RelativePath, Success, ImageCount, ImageBytes
+```
+
+Use the standard common parameters to preview changes or display operational
+details:
+
+```powershell
+Expand-ImageArchive -InputPath .\archive -OutputPath .\extracted -WhatIf
+Expand-ImageArchive -InputPath .\archive -OutputPath .\extracted -Verbose
+```
 
 ### Options
 
 ```powershell
-pwsh ./Extract-ImageArchives.ps1 `
-    -ArchivePath ./archive `
-    -ExtractedPath ./extracted `
+Expand-ImageArchive `
+    -InputPath .\archive `
+    -OutputPath .\extracted `
     -ThrottleLimit 10 `
     -MaxNestedDepth 5 `
-    -Extensions .png,.jpg,.jpeg
+    -Extension .png, .jpg, .jpeg
 ```
 
-- `ThrottleLimit` controls the maximum number of disk ZIPs processed concurrently. Nested ZIPs are processed sequentially by their owning worker.
-- `MaxNestedDepth` counts embedded ZIP levels; disk ZIPs are depth zero. A ZIP beyond this depth fails and rolls back its owning disk ZIP.
-- `Extensions` replaces the default image allowlist. Values may be supplied with or without a leading period.
+- `ThrottleLimit` controls how many disk ZIPs are processed concurrently.
+- `MaxNestedDepth` limits embedded ZIP recursion; disk ZIPs are depth zero.
+- `Extension` replaces the default image allowlist. Values may include or omit
+  the leading period.
 
-Each disk ZIP is staged independently. A successful run replaces that ZIP's previous destination folder, removing stale files. If a ZIP is corrupt, encrypted, unsafe, or otherwise unreadable, its prior destination remains untouched while other ZIPs continue. Any failure produces a nonzero process exit code.
+The defaults retain PNG, JPG/JPEG, GIF, BMP, WebP, TIFF, TGA, DDS, SVG, HDR,
+and EXR files. Matching is case-insensitive. Other entries are ignored, except
+embedded ZIP files.
 
-The script rejects path traversal, invalid Windows filenames, duplicate outputs, file/directory conflicts, and disk ZIP layouts whose destination folders overlap. It also takes an exclusive lock on the extracted root so two runs cannot modify it simultaneously.
+Each disk ZIP is staged independently. A successful extraction replaces that
+ZIP's prior destination, removing stale files. If a ZIP is corrupt, encrypted,
+unsafe, or otherwise unreadable, its prior destination remains untouched while
+other ZIPs continue. Failures produce non-terminating PowerShell errors and
+result objects whose `Success` property is `$false`.
+
+The module rejects path traversal, invalid Windows filenames, duplicate outputs,
+file/directory conflicts, and ZIP layouts whose destination folders overlap. It
+also takes an exclusive lock on the output root so two runs cannot modify it at
+the same time.
 
 ## Tests
 
-The test suite is compatible with the repository's available Pester installation:
+The test suite supports the repository's installed Pester version:
 
 ```powershell
-Invoke-Pester ./tests/Extract-ImageArchives.Tests.ps1
+Invoke-Pester .\tests\Extract-ImageArchives.Tests.ps1
 ```
