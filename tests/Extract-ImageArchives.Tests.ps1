@@ -1,5 +1,5 @@
-$scriptUnderTest = Join-Path (Split-Path $PSScriptRoot -Parent) 'Extract-ImageArchives.ps1'
-$pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+$moduleUnderTest = Join-Path (Split-Path $PSScriptRoot -Parent) 'AssetScripts.psd1'
+Import-Module $moduleUnderTest -Force -ErrorAction Stop
 
 function New-TestZip {
     param(
@@ -57,19 +57,74 @@ function Invoke-Extractor {
         [int] $MaxNestedDepth = 5
     )
 
-    $output = & $pwsh -NoLogo -NoProfile -File $scriptUnderTest `
-        -ArchivePath $ArchivePath `
-        -ExtractedPath $ExtractedPath `
-        -ThrottleLimit $ThrottleLimit `
-        -MaxNestedDepth $MaxNestedDepth 2>&1 | Out-String
+    $invocationErrors = @()
+    $results = @()
+    try {
+        $results = @(Expand-ImageArchive `
+            -InputPath $ArchivePath `
+            -OutputPath $ExtractedPath `
+            -ThrottleLimit $ThrottleLimit `
+            -MaxNestedDepth $MaxNestedDepth `
+            -ErrorAction SilentlyContinue `
+            -ErrorVariable invocationErrors)
+    }
+    catch {
+        $invocationErrors = @($_)
+    }
 
     return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
-        Output   = $output
+        Results   = $results
+        Errors    = @($invocationErrors)
+        ErrorText = ($invocationErrors | Out-String)
     }
 }
 
-Describe 'Extract-ImageArchives.ps1' {
+Describe 'AssetScripts module contract' {
+    It 'exports only Expand-ImageArchive with mandatory input and output paths' {
+        $exportedFunctions = @(Get-Command -Module AssetScripts -CommandType Function)
+        $exportedFunctions.Count | Should Be 1
+        $exportedFunctions[0].Name | Should Be 'Expand-ImageArchive'
+
+        $command = Get-Command Expand-ImageArchive
+        ($command.Parameters.InputPath.Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } |
+            Select-Object -First 1).Mandatory | Should Be $true
+        ($command.Parameters.OutputPath.Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } |
+            Select-Object -First 1).Mandatory | Should Be $true
+    }
+
+    It 'supports WhatIf without creating the output directory' {
+        $inputPath = Join-Path $TestDrive 'whatif-input'
+        $outputPath = Join-Path $TestDrive 'whatif-output'
+        [void][System.IO.Directory]::CreateDirectory($inputPath)
+
+        Expand-ImageArchive -InputPath $inputPath -OutputPath $outputPath -WhatIf
+
+        (Test-Path -LiteralPath $outputPath) | Should Be $false
+    }
+
+    It 'resolves input and output paths from the caller current directory' {
+        $workingPath = Join-Path $TestDrive 'relative-paths'
+        [void][System.IO.Directory]::CreateDirectory($workingPath)
+        New-TestZip -Path (Join-Path $workingPath 'input/icons.zip') -Entries @{
+            'icon.png' = 'image'
+        }
+
+        Push-Location $workingPath
+        try {
+            $result = Invoke-Extractor -ArchivePath 'input' -ExtractedPath 'output'
+        }
+        finally {
+            Pop-Location
+        }
+
+        $result.Errors.Count | Should Be 0
+        (Test-Path -LiteralPath (Join-Path $workingPath 'output/icons/icon.png')) | Should Be $true
+    }
+}
+
+Describe 'Expand-ImageArchive' {
     BeforeEach {
         $caseRoot = Join-Path $TestDrive ([System.Guid]::NewGuid().ToString('N'))
         [void][System.IO.Directory]::CreateDirectory($caseRoot)
@@ -99,7 +154,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 0
+        $result.Errors.Count | Should Be 0
         (Get-ChildItem -LiteralPath (Join-Path $extracted 'Bundle1/2dsprites2') -Recurse -File).Count | Should Be 13
         (Test-Path -LiteralPath (Join-Path $extracted 'Bundle1/2dsprites2/2dsprites2/a.PNG')) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $extracted 'Bundle1/2dsprites2/2dsprites2/no.txt')) | Should Be $false
@@ -124,7 +179,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 0
+        $result.Errors.Count | Should Be 0
         $expected = Join-Path $extracted 'outer/level1/level2/level3/level4/level5/sprite.png'
         (Get-Content -LiteralPath $expected -Raw) | Should Be 'deep'
     }
@@ -151,9 +206,9 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 1
+        $result.Errors.Count | Should Be 1
         (Get-Content -LiteralPath (Join-Path $destination 'old.png') -Raw) | Should Be 'old'
-        $result.Output | Should Match 'depth exceeds'
+        $result.ErrorText | Should Match 'depth exceeds'
     }
 
     It 'replaces successful output, preserves failed output, and continues other archives' {
@@ -169,7 +224,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 1
+        $result.Errors.Count | Should Be 1
         (Test-Path -LiteralPath (Join-Path $extracted 'good/stale.png')) | Should Be $false
         (Get-Content -LiteralPath (Join-Path $extracted 'good/new.png') -Raw) | Should Be 'new'
         (Get-Content -LiteralPath (Join-Path $extracted 'bad/old.png') -Raw) | Should Be 'old'
@@ -186,7 +241,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 1
+        $result.Errors.Count | Should Be 2
         (Test-Path -LiteralPath (Join-Path $extracted 'traversal')) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $caseRoot 'escape.png')) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $extracted 'duplicate')) | Should Be $false
@@ -203,7 +258,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 1
+        $result.Errors.Count | Should Be 2
         (Test-Path -LiteralPath (Join-Path $extracted 'rooted')) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $extracted 'conflict')) | Should Be $false
     }
@@ -216,8 +271,8 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 1
-        $result.Output | Should Match 'destinations overlap'
+        $result.Errors.Count | Should Be 1
+        $result.ErrorText | Should Match 'destinations overlap'
         (Test-Path -LiteralPath (Join-Path $extracted 'foo')) | Should Be $false
     }
 
@@ -229,7 +284,7 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted -ThrottleLimit 10
 
-        $result.ExitCode | Should Be 0
+        $result.Errors.Count | Should Be 0
         (Test-Path -LiteralPath (Join-Path $extracted 'a') -PathType Container) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $extracted 'b') -PathType Container) | Should Be $true
         (Get-ChildItem -LiteralPath (Join-Path $extracted 'a')).Count | Should Be 0
@@ -244,8 +299,8 @@ Describe 'Extract-ImageArchives.ps1' {
 
         $result = Invoke-Extractor -ArchivePath $archive -ExtractedPath $extracted
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Match 'Found 0 archive'
+        $result.Errors.Count | Should Be 0
+        $result.Results.Count | Should Be 0
         (Test-Path -LiteralPath $extracted -PathType Container) | Should Be $true
     }
 
@@ -268,7 +323,7 @@ Describe 'Extract-ImageArchives.ps1' {
             $lock.Dispose()
         }
 
-        $result.ExitCode | Should Be 1
-        $result.Output | Should Match 'already using'
+        $result.Errors.Count | Should Be 1
+        $result.ErrorText | Should Match 'already using'
     }
 }
