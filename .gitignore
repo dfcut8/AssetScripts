@@ -1,0 +1,5 @@
+/archive/*
+!/archive/.gitkeep
+/extracted/
+/.image-archive-extractor-work/
+*.image-archive-extractor.lock
